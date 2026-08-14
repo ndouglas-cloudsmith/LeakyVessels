@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: raider
+spec:
+  hostPID: true
+  containers:
+  - name: raider
+    image: ubuntu:latest
+    command: ["/bin/sh"]
+    securityContext:
+      privileged: true
+    args: ["-c", "while true; do sleep 10;done"]
+    tty: true
