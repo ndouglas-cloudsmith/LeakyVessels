@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: leaky-vessel
+spec:
+  containers:
+  - name: leaky-vessel
+    image: denhamparry/leaky-vessel:0.1
+    imagePullPolicy: Always
+    env:
+    - name: SUPER_ORCHESTRATOR_SECRET
+      value: "this-is-fine-leaky"
