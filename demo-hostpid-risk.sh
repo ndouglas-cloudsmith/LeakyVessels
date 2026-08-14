@@ -5,7 +5,7 @@ set -euo pipefail
 RED="\033[0;31m"
 GREEN="\033[0;32m"
 CYAN="\033[0;36m"
-YELLOW="\033[0;33m"
+ORANGE="\033[38;5;208m" # Vibrant 256-color Orange
 MAGENTA="\033[0;35m"
 BOLD="\033[1m"
 NC="\033[0m"
@@ -15,9 +15,9 @@ step() {
     local intent="$1"
     local cmd="$2"
     
-    echo -e "\n${YELLOW}----------------------------------------------------${NC}"
-    echo -e "${BOLD}INTENT:${NC} ${intent}"
-    echo -e "${YELLOW}----------------------------------------------------${NC}"
+    echo -e "\n${ORANGE}----------------------------------------------------${NC}"
+    echo -e "${ORANGE}${BOLD}INTENT:${NC} ${ORANGE}${intent}${NC}"
+    echo -e "${ORANGE}----------------------------------------------------${NC}"
     echo -e "${MAGENTA}$ ${cmd}${NC}"
     echo -en "${CYAN}[Press ENTER to execute command...]${NC}"
     read -r
@@ -25,6 +25,7 @@ step() {
     eval "$cmd"
 }
 
+# Automatic cleanup handler
 cleanup() {
     echo -e "\n${CYAN}Triggering cleanup of demo resources...${NC}"
     kubectl delete pod target-app inspector-pod --force --grace-period=0 --ignore-not-found=true >/dev/null 2>&1
@@ -55,8 +56,8 @@ spec:
       value: \"SuperSecretPassword123!\"
 EOF"
 
-step "VERIFY: Wait for the victim pod to enter 'Running' state." \
-"kubectl wait --for=condition=Ready pod/target-app --timeout=60s && kubectl get pod target-app -o wide"
+step "VERIFY: Wait for victim pod, show IP/node status & creation events." \
+"kubectl wait --for=condition=Ready pod/target-app --timeout=60s && kubectl get pod target-app -o wide && echo '' && kubectl get events --field-selector involvedObject.name=target-app --sort-by='.metadata.creationTimestamp' | tail -n 5"
 
 # --- PHASE 2 ---
 step "PHASE 2: Deploy an attacker pod configured with hostPID: true and privileged mode." \
